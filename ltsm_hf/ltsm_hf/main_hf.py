@@ -66,7 +66,7 @@ def get_args():
     parser.add_argument('--n_heads', type=int, default=16)
     parser.add_argument('--d_ff', type=int, default=512)
     parser.add_argument('--dropout', type=float, default=0.2)
-    parser.add_argument('--enc_in', type=int, default=862)
+    parser.add_argument('--enc_in', type=int, default=1)
     parser.add_argument('--c_out', type=int, default=862)
     parser.add_argument('--patch_size', type=int, default=16)
     parser.add_argument('--kernel_size', type=int, default=25)
@@ -87,6 +87,8 @@ def get_args():
     parser.add_argument('--lora', action="store_true")
     parser.add_argument('--lora_dim', type=int, default=128)
     parser.add_argument('--downsample_rate', type=int, default=100)
+    parser.add_argument('--llm_layers', type=int, default=32)
+
     # args = parser.parse_args()
     args, unknown = parser.parse_known_args()
 
@@ -159,25 +161,32 @@ def run(args):
                 "mae": (np.abs(preds - label_ids)).mean().item()}
 
     def compute_loss(model, inputs, return_outputs=False):
+        # ipdb.set_trace()
         outputs = model(inputs["input_data"])
+        # import ipdb; ipdb.set_trace()
         loss = nn.functional.mse_loss(outputs, inputs["labels"])
         return (loss, outputs) if return_outputs else loss
 
     def collate_fn(batch):
+        # ipdb.set_trace()
         return {
             'input_data': torch.from_numpy(np.stack([x['input_data'] for x in batch])).type(torch.float32),
             'labels': torch.from_numpy(np.stack([x['labels'] for x in batch])).type(torch.float32),
+            
+            # 'input_data': torch.from_numpy(np.stack([np.array(x['input_data']) for x in batch])).type(torch.float32),
+            # 'labels': torch.from_numpy(np.stack([np.array(x['labels']) for x in batch])).type(torch.float32),
+            
         }
 
     @torch.no_grad()
     def prediction_step(model, inputs, prediction_loss_only=False, ignore_keys=None):
         # CSV
-        input_data = inputs["input_data"].to(model.module.device)
-        labels = inputs["labels"].to(model.module.device)
+        # input_data = inputs["input_data"].to(model.module.device)
+        # labels = inputs["labels"].to(model.module.device)
         
         # monash
-        # input_data = inputs["input_data"].to(model.device)
-        # labels = inputs["labels"].to(model.device)
+        input_data = inputs["input_data"].to(model.device)
+        labels = inputs["labels"].to(model.device)
         outputs = model(input_data)
         loss = nn.functional.mse_loss(outputs, labels)
         return (loss, outputs, labels)

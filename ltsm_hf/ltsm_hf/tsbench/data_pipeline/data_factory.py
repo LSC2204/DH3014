@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from tsbench.data_pipeline.reader import reader_dict
 from tsbench.data_pipeline.splitter import SplitterByTimestamp
 from tsbench.data_pipeline.data_processing import processor_dict
-from tsbench.data_pipeline.dataset import TSDataset,  TSPromptDataset, TSPromptDatasetTXT
+from tsbench.data_pipeline.dataset import TSDataset,  TSPromptDataset, TSTokenDataset
 import ipdb
 
 def create_csv_datasets(
@@ -27,20 +27,9 @@ def create_csv_datasets(
 
     # TODO: we can support using only a percentage of the training data
     # However, this could be confusing. Thus, we will only do it when needed
-    if 'text' in prompt_data_path:
-        get_prompt = _get_txt_prompt
-        TimeSeriesDataset = TSPromptDatasetTXT
-    else:
-        get_prompt = _get_csv_prompt
-        TimeSeriesDataset = TSPromptDataset
-
-        
     # Training data
     train_data, val_data, test_data, train_prompt_data, val_prompt_data, test_prompt_data = [], [], [], [], [], []
-    train_data1, val_data1, test_data1, prompt_data1 = [],[],[],[]
     for sub_data_path in data_path:
-        
-
         # We parse the datapath to get the dataset class
         # dir_name = os.path.split(os.path.dirname(sub_data_path))[-1]
         sub_train_ratio = train_ratio
@@ -109,7 +98,7 @@ def create_csv_datasets(
         # Train Prompt
         train_prompt_data_path = prompt_data_path + '/train'
         for train_intance_idx in buff:
-            instance_prompt =get_prompt(
+            instance_prompt =_get_csv_prompt(
                 train_prompt_data_path,  
                 sub_data_path,
                 train_intance_idx
@@ -118,7 +107,7 @@ def create_csv_datasets(
         
         val_prompt_data_path = prompt_data_path + '/val'
         for val_intance_idx in buff:
-            instance_prompt = get_prompt(
+            instance_prompt = _get_csv_prompt(
                 val_prompt_data_path,  
                 sub_data_path,
                 val_intance_idx
@@ -126,20 +115,20 @@ def create_csv_datasets(
             val_prompt_data.append(instance_prompt)
 
         # Step 2.5: Merge the list of data
-        train_data.extend(sub_train_data)
-        val_data.extend(sub_val_data)
-        test_data.extend(sub_test_data)
+        # train_data.extend(sub_train_data)
+        # val_data.extend(sub_val_data)
+        # test_data.extend(sub_test_data)
         
-        train_data1.append(sub_train_data)
-        val_data1.append(sub_val_data)
-        test_data1.append(sub_test_data)
+        train_data.append(sub_train_data)
+        val_data.append(sub_val_data)
+        test_data.append(sub_test_data)
 
 
         # ipdb.set_trace()
 
     # Step 3: Create Torch datasets (samplers)
-    train_dataset = TimeSeriesDataset(
-        data=train_data1,
+    train_dataset = TSPromptDataset (
+        data=train_data,
         prompt=train_prompt_data,
         seq_len=seq_len,
         pred_len=pred_len,
@@ -147,8 +136,8 @@ def create_csv_datasets(
         uniform_sampling=False
     )
 
-    val_dataset = TimeSeriesDataset(
-        data=val_data1,
+    val_dataset = TSPromptDataset (
+        data=val_data,
         prompt=val_prompt_data,
         seq_len=seq_len,
         pred_len=pred_len,
@@ -224,16 +213,415 @@ def create_csv_datasets(
     test_prompt_data = []
     test_prompt_data_path = prompt_data_path + "/test"
     for test_intance_idx in buff:
-            instance_prompt = get_prompt(
+            instance_prompt = _get_csv_prompt(
                 test_prompt_data_path,  
                 test_data_path,
                 test_intance_idx
             )
             test_prompt_data.append(instance_prompt)
     # TODO : Fix this
-    test_dataset = TimeSeriesDataset(
+    test_dataset = TSPromptDataset (
         data=[test_data], # add 1 dimension to match the dimension of training data in dataloader
         prompt=test_prompt_data,
+        seq_len=seq_len,
+        pred_len=pred_len,
+        downsample_rate=1,
+        uniform_sampling=False
+    )
+
+    return train_dataset, val_dataset,test_dataset, processor
+
+data2index = {"ETTh1": 0, "ETTh2": 1, "ETTm1": 2, "ETTm2": 3,"electricity":4, "exchange_rate":5, "traffic":6, "weather":7}
+
+
+def create_csv_text_datasets(
+    data_path,
+    test_data_path,
+    prompt_data_path,
+    data_processing,
+    seq_len,
+    pred_len,
+    prompt_len,
+    train_ratio,
+    val_ratio,
+    scale_on_train=False,
+    downsample_rate=10,
+):
+    # Here, we directly load the training, validation, and testing splits
+    # to aviod loading the same dataset 3 times
+
+    # TODO: we can support using only a percentage of the training data
+    # However, this could be confusing. Thus, we will only do it when needed
+        
+    # Training data
+    train_data, val_data, test_data, train_prompt_data, val_prompt_data, test_prompt_data = [], [], [], [], [], []
+
+    for sub_data_path in data_path:        
+        data_name = sub_data_path.split('/')[-1].split('.')[0]
+        # We parse the datapath to get the dataset class
+        # dir_name = os.path.split(os.path.dirname(sub_data_path))[-1]
+        sub_train_ratio = train_ratio
+        sub_val_ratio = val_ratio
+        
+        df_data = pd.read_csv(sub_data_path)
+        cols = df_data.columns[1:] 
+        raw_data = df_data[cols].T.values
+        
+        # keep the ETT data setting same with PatchTST (dataset length and train/val/test ratio)
+        if 'ETTh1' in sub_data_path or 'ETTh2' in sub_data_path:
+            # raw_data = df_data[cols][:14400].T.values
+            sub_train_ratio = 0.6
+            sub_val_ratio = 0.2
+        if 'ETTm1' in sub_data_path or 'ETTm2' in sub_data_path:
+            # raw_data = df_data[cols][:57600].T.values
+            sub_train_ratio = 0.6
+            sub_val_ratio = 0.2
+        test_ratio = 1.0 - sub_train_ratio - sub_val_ratio
+        print(f"Training Loading {sub_data_path}, train {sub_train_ratio:.2f}, val {sub_val_ratio:.2f}, test {test_ratio:.2f}")
+
+        # Step 0: Read data, the output is a list of 1-d time-series
+        # raw_data = reader_dict[dir_name](sub_data_path).fetch()
+
+        # ipdb.set_trace()
+        """
+        print(len(raw_data))
+        print(raw_data[0])
+        print(raw_data[0].shape)
+        for a in raw_data:
+            print(len(a))
+        exit()
+        """
+
+        # Step 1: Get train, val, and test splits
+        # For now, we use SplitterByTimestamp only
+        sub_train_data, sub_val_data, sub_test_data, buff = SplitterByTimestamp(
+            seq_len,
+            pred_len,
+            train_ratio=sub_train_ratio,
+            val_ratio=sub_val_ratio,
+            prompt_folder_path=prompt_data_path,
+            data_name=sub_data_path
+        ).get_csv_splits(df_data)
+
+        """
+        print(len(train_data), train_data[0].shape)
+        print(len(val_data), val_data[0].shape)
+        print(len(test_data), test_data[0].shape)
+        exit()
+        """
+
+        # Step 2: Scale the datasets. We fit on the whole sequence by default.
+        # To fit on the train sequence only, set scale_on_train=True
+        # For now, we use StandardScaler only
+        processor = processor_dict[data_processing]() 
+        sub_train_data, sub_val_data, sub_test_data = processor.process(
+            raw_data,  # Used for scaling
+            sub_train_data,
+            sub_val_data,
+            sub_test_data,
+            fit_train_only=scale_on_train,
+        )
+
+        # Step 2.5 Load prompt for each instance
+        # Train Prompt
+        for train_intance_idx in buff:
+            train_prompt_data.append([data2index[data_name]])
+        
+        for val_intance_idx in buff:
+            val_prompt_data.append([data2index[data_name]])
+
+        # Step 2.5: Merge the list of data        
+        train_data.append(sub_train_data)
+        val_data.append(sub_val_data)
+        test_data.append(sub_test_data)
+
+
+        # ipdb.set_trace()
+
+    # Step 3: Create Torch datasets (samplers)
+    train_dataset = TSPromptDataset(
+        data=train_data,
+        prompt=train_prompt_data,
+        seq_len=seq_len,
+        pred_len=pred_len,
+        downsample_rate=downsample_rate,
+        uniform_sampling=False
+    )
+
+    val_dataset = TSPromptDataset(
+        data=val_data,
+        prompt=val_prompt_data,
+        seq_len=seq_len,
+        pred_len=pred_len,
+        downsample_rate=downsample_rate,
+        uniform_sampling=False
+    )
+    
+    test_train_ratio, test_val_ratio = train_ratio, val_ratio
+    # Testing data
+    if 'ETTh1' in test_data_path or 'ETTh2' in test_data_path:
+        # raw_data = df_data[cols][:14400].T.values
+        test_train_ratio = 0.6
+        test_val_ratio = 0.2
+    if 'ETTm1' in test_data_path or 'ETTm2' in test_data_path:
+        # raw_data = df_data[cols][:57600].T.values
+        test_train_ratio = 0.6
+        test_val_ratio = 0.2
+    test_test_ratio = 1.0 - test_train_ratio - test_val_ratio
+    print(f"Testing Loading {test_data_path}, train {test_train_ratio:.2f}, val {test_val_ratio:.2f}, test {test_test_ratio:.2f}")
+
+    # We parse the datapath to get the dataset class
+    # dir_name = os.path.split(os.path.dirname(test_data_path))[-1]
+
+    # Step 0: Read data, the output is a list of 1-d time-series
+    test_data_name = test_data_path.split('/')[-1].split('.')[0]
+    df_data = pd.read_csv(test_data_path)
+    cols = df_data.columns[1:] 
+    raw_data = df_data[cols].T.values
+    """
+    print(len(raw_data))
+    print(raw_data[0])
+    print(raw_data[0].shape)
+    for a in raw_data:
+        print(len(a))
+    exit()
+    """
+
+    # Step 1: Get train, val, and test splits
+    # For now, we use SplitterByTimestamp only
+    train_data, val_data, test_data, buff = SplitterByTimestamp(
+        seq_len,
+        pred_len,
+        train_ratio=test_train_ratio,
+        val_ratio=test_val_ratio,
+        prompt_folder_path=prompt_data_path,
+        data_name=test_data_path
+    ).get_csv_splits(df_data)
+
+    """
+    print(len(train_data), train_data[0].shape)
+    print(len(val_data), val_data[0].shape)
+    print(len(test_data), test_data[0].shape)
+    exit()
+    """
+
+    # Step 2: Scale the datasets. We fit on the whole sequence by default.
+    # To fit on the train sequence only, set scale_on_train=True
+    # For now, we use StandardScaler only
+    processor = processor_dict[data_processing]() 
+    train_data, val_data, test_data = processor.process(
+        raw_data,  # Used for scaling
+        train_data,
+        val_data,
+        test_data,
+        fit_train_only=scale_on_train,
+    )
+
+    """
+    print(len(train_data), train_data[0].shape, train_data[3])
+    print(len(val_data), val_data[0].shape, val_data[3])
+    print(len(test_data), test_data[0].shape, test_data[3])
+    exit()
+    """
+    for test_intance_idx in buff:
+        test_prompt_data.append([data2index[test_data_name]])
+        
+    # TODO : Fix this
+    test_dataset = TSPromptDataset(
+        data=[test_data], # add 1 dimension to match the dimension of training data in dataloader
+        prompt=test_prompt_data,
+        seq_len=seq_len,
+        pred_len=pred_len,
+        downsample_rate=1,
+        uniform_sampling=False
+    )
+
+    return train_dataset, val_dataset,test_dataset, processor
+
+def create_csv_token_datasets(
+    data_path,
+    test_data_path,
+    prompt_data_path,
+    data_processing,
+    seq_len,
+    pred_len,
+    prompt_len,
+    train_ratio,
+    val_ratio,
+    scale_on_train=False,
+    downsample_rate=10,
+):
+    # Here, we directly load the training, validation, and testing splits
+    # to aviod loading the same dataset 3 times
+
+    # TODO: we can support using only a percentage of the training data
+    # However, this could be confusing. Thus, we will only do it when needed
+        
+    # Training data
+    train_data, val_data, test_data, train_prompt_data, val_prompt_data, test_prompt_data = [], [], [], [], [], []
+
+    for sub_data_path in data_path:        
+        data_name = sub_data_path.split('/')[-1].split('.')[0]
+        # We parse the datapath to get the dataset class
+        # dir_name = os.path.split(os.path.dirname(sub_data_path))[-1]
+        sub_train_ratio = train_ratio
+        sub_val_ratio = val_ratio
+        
+        df_data = pd.read_csv(sub_data_path)
+        cols = df_data.columns[1:] 
+        raw_data = df_data[cols].T.values
+        
+        # keep the ETT data setting same with PatchTST (dataset length and train/val/test ratio)
+        if 'ETTh1' in sub_data_path or 'ETTh2' in sub_data_path:
+            # raw_data = df_data[cols][:14400].T.values
+            sub_train_ratio = 0.6
+            sub_val_ratio = 0.2
+        if 'ETTm1' in sub_data_path or 'ETTm2' in sub_data_path:
+            # raw_data = df_data[cols][:57600].T.values
+            sub_train_ratio = 0.6
+            sub_val_ratio = 0.2
+        test_ratio = 1.0 - sub_train_ratio - sub_val_ratio
+        print(f"Training Loading {sub_data_path}, train {sub_train_ratio:.2f}, val {sub_val_ratio:.2f}, test {test_ratio:.2f}")
+
+        # Step 0: Read data, the output is a list of 1-d time-series
+        # raw_data = reader_dict[dir_name](sub_data_path).fetch()
+
+        # ipdb.set_trace()
+        """
+        print(len(raw_data))
+        print(raw_data[0])
+        print(raw_data[0].shape)
+        for a in raw_data:
+            print(len(a))
+        exit()
+        """
+
+        # Step 1: Get train, val, and test splits
+        # For now, we use SplitterByTimestamp only
+        sub_train_data, sub_val_data, sub_test_data, buff = SplitterByTimestamp(
+            seq_len,
+            pred_len,
+            train_ratio=sub_train_ratio,
+            val_ratio=sub_val_ratio,
+            prompt_folder_path=prompt_data_path,
+            data_name=sub_data_path
+        ).get_csv_splits(df_data)
+
+        """
+        print(len(train_data), train_data[0].shape)
+        print(len(val_data), val_data[0].shape)
+        print(len(test_data), test_data[0].shape)
+        exit()
+        """
+
+        # Step 2: Scale the datasets. We fit on the whole sequence by default.
+        # To fit on the train sequence only, set scale_on_train=True
+        # For now, we use StandardScaler only
+        processor = processor_dict[data_processing]() 
+        sub_train_data, sub_val_data, sub_test_data = processor.process(
+            raw_data,  # Used for scaling
+            sub_train_data,
+            sub_val_data,
+            sub_test_data,
+            fit_train_only=scale_on_train,
+        )
+
+
+        # Step 2.5: Merge the list of data        
+        train_data.append(sub_train_data)
+        val_data.append(sub_val_data)
+        test_data.append(sub_test_data)
+
+
+        # ipdb.set_trace()
+
+    # Step 3: Create Torch datasets (samplers)
+    train_dataset = TSTokenDataset(
+        data=train_data,
+        seq_len=seq_len,
+        pred_len=pred_len,
+        downsample_rate=downsample_rate,
+        uniform_sampling=False
+    )
+
+    val_dataset = TSTokenDataset(
+        data=val_data,
+        seq_len=seq_len,
+        pred_len=pred_len,
+        downsample_rate=downsample_rate,
+        uniform_sampling=False
+    )
+    
+    test_train_ratio, test_val_ratio = train_ratio, val_ratio
+    # Testing data
+    if 'ETTh1' in test_data_path or 'ETTh2' in test_data_path:
+        # raw_data = df_data[cols][:14400].T.values
+        test_train_ratio = 0.6
+        test_val_ratio = 0.2
+    if 'ETTm1' in test_data_path or 'ETTm2' in test_data_path:
+        # raw_data = df_data[cols][:57600].T.values
+        test_train_ratio = 0.6
+        test_val_ratio = 0.2
+    test_test_ratio = 1.0 - test_train_ratio - test_val_ratio
+    print(f"Testing Loading {test_data_path}, train {test_train_ratio:.2f}, val {test_val_ratio:.2f}, test {test_test_ratio:.2f}")
+
+    # We parse the datapath to get the dataset class
+    # dir_name = os.path.split(os.path.dirname(test_data_path))[-1]
+
+    # Step 0: Read data, the output is a list of 1-d time-series
+    test_data_name = test_data_path.split('/')[-1].split('.')[0]
+    df_data = pd.read_csv(test_data_path)
+    cols = df_data.columns[1:] 
+    raw_data = df_data[cols].T.values
+    """
+    print(len(raw_data))
+    print(raw_data[0])
+    print(raw_data[0].shape)
+    for a in raw_data:
+        print(len(a))
+    exit()
+    """
+
+    # Step 1: Get train, val, and test splits
+    # For now, we use SplitterByTimestamp only
+    train_data, val_data, test_data, buff = SplitterByTimestamp(
+        seq_len,
+        pred_len,
+        train_ratio=test_train_ratio,
+        val_ratio=test_val_ratio,
+        prompt_folder_path=prompt_data_path,
+        data_name=test_data_path
+    ).get_csv_splits(df_data)
+
+    """
+    print(len(train_data), train_data[0].shape)
+    print(len(val_data), val_data[0].shape)
+    print(len(test_data), test_data[0].shape)
+    exit()
+    """
+
+    # Step 2: Scale the datasets. We fit on the whole sequence by default.
+    # To fit on the train sequence only, set scale_on_train=True
+    # For now, we use StandardScaler only
+    processor = processor_dict[data_processing]() 
+    train_data, val_data, test_data = processor.process(
+        raw_data,  # Used for scaling
+        train_data,
+        val_data,
+        test_data,
+        fit_train_only=scale_on_train,
+    )
+
+    """
+    print(len(train_data), train_data[0].shape, train_data[3])
+    print(len(val_data), val_data[0].shape, val_data[3])
+    print(len(test_data), test_data[0].shape, test_data[3])
+    exit()
+    """
+        
+    # TODO : Fix this
+    test_dataset = TSTokenDataset(
+        data=[test_data], # add 1 dimension to match the dimension of training data in dataloader
         seq_len=seq_len,
         pred_len=pred_len,
         downsample_rate=1,
@@ -476,18 +864,45 @@ def _get_txt_prompt(prompt_folder_path, data_name, idx_file_name):
 def get_datasets(args):
     file_ext = os.path.splitext(args.data_path[0])[-1]
     if file_ext == ".csv":
-        train_dataset, val_dataset, test_dataset, processor = create_csv_datasets(
-            data_path=args.data_path,
-            test_data_path=args.test_data_path,
-            prompt_data_path=args.prompt_data_path,
-            data_processing=args.data_processing,
-            seq_len=args.seq_len,
-            pred_len=args.pred_len,
-            prompt_len=args.prompt_len,
-            train_ratio=args.train_ratio,
-            val_ratio=args.val_ratio,
-            downsample_rate=args.downsample_rate,
-        )
+        if args.model == "TimeLLM":
+            train_dataset, val_dataset, test_dataset, processor = create_csv_text_datasets(
+                data_path=args.data_path,
+                test_data_path=args.test_data_path,
+                prompt_data_path=args.prompt_data_path,
+                data_processing=args.data_processing,
+                seq_len=args.seq_len,
+                pred_len=args.pred_len,
+                prompt_len=args.prompt_len,
+                train_ratio=args.train_ratio,
+                val_ratio=args.val_ratio,
+                downsample_rate=args.downsample_rate,
+            )
+        elif args.model == "Token":
+            train_dataset, val_dataset, test_dataset, processor = create_csv_token_datasets(
+                data_path=args.data_path,
+                test_data_path=args.test_data_path,
+                prompt_data_path=args.prompt_data_path,
+                data_processing=args.data_processing,
+                seq_len=args.seq_len,
+                pred_len=args.pred_len,
+                prompt_len=args.prompt_len,
+                train_ratio=args.train_ratio,
+                val_ratio=args.val_ratio,
+                downsample_rate=args.downsample_rate,
+            )
+        else:
+            train_dataset, val_dataset, test_dataset, processor = create_csv_datasets(
+                data_path=args.data_path,
+                test_data_path=args.test_data_path,
+                prompt_data_path=args.prompt_data_path,
+                data_processing=args.data_processing,
+                seq_len=args.seq_len,
+                pred_len=args.pred_len,
+                prompt_len=args.prompt_len,
+                train_ratio=args.train_ratio,
+                val_ratio=args.val_ratio,
+                downsample_rate=args.downsample_rate,
+            )
     else:
     # Create datasets
         train_dataset, val_dataset, test_dataset, processor = create_datasets(
@@ -542,4 +957,3 @@ def get_data_loaders(args):
     )
 
     return train_loader, val_loader, test_loader, processor
-
