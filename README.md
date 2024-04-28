@@ -1,4 +1,8 @@
-# DH3014
+# Tokenizer
+ltsm_hf/ltsm_hf/scripts/train_csv_tokenizer.sh
+
+use cross_entropy to calculate loss.
+![alt text](image.png)
 - ETT-small
   - ETT-h1.csv
   - ETT-h2.csv
