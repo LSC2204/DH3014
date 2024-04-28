@@ -1,4 +1,4 @@
-# Tokenizer
+# Tokenizer(https://github.com/amazon-science/chronos-forecasting?tab=readme-ov-file)
 ltsm_hf/ltsm_hf/scripts/train_csv_tokenizer.sh
 
 use cross_entropy to calculate loss.
