@@ -176,6 +176,7 @@ class MeanScaleUniformBins(ChronosTokenizer):
     def output_transform(
         self, samples: torch.Tensor, scale: torch.Tensor
     ) -> torch.Tensor:
+        # import ipdb; ipdb.set_trace()
         scale_unsqueezed = scale.unsqueeze(-1).unsqueeze(-1)
         indices = torch.clamp(
             samples - self.config.n_special_tokens,
@@ -269,8 +270,9 @@ class MeanScaleUniformBins(ChronosTokenizer):
     def input_transform(
         self, context: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # context  = context.permute(1, 0)
         batch_size, length = context.shape
-
+        # import ipdb; ipdb.set_trace()
         if length > self.config.context_length:
             context = context[..., -self.config.context_length :]
 
@@ -313,5 +315,5 @@ class MeanScaleUniformBins(ChronosTokenizer):
             max=len(self.centers) - 1,
         ).to(self.centers.device)  # Move indices tensor to the same device as self.centers
         
-        print("indices = {}".format(indices))
+        # print("indices = {}".format(indices))
         return self.centers[indices] * scale_unsqueezed

@@ -156,7 +156,7 @@ class TSTokenDataset(Dataset):
         for d in data:
             self.data.extend(d)
             
-        context_length = seq_len
+        context_length = seq_len+pred_len
         prediction_length = pred_len
         n_tokens = 1024
         n_special_tokens = 2
@@ -203,14 +203,23 @@ class TSTokenDataset(Dataset):
         
         # seq_x = self.data[sequence_index][x_begin:x_end]
         # seq_x = torch.from_numpy(np.expand_dims(seq_x, -1))
-        seq_x = torch.from_numpy(np.expand_dims(self.data[sequence_index][x_begin:x_end], -1))
-        seq_y = torch.from_numpy(np.expand_dims(self.data[sequence_index][y_begin:y_end], -1))
-        token_x, attn_x, scale_x = self.tokenizer.input_transform(seq_x)
-        token_y, attn_y, scale_y = self.tokenizer.input_transform(seq_y)
+        # seq_x = torch.from_numpy(np.expand_dims(self.data[sequence_index][x_begin:x_end], -1))
+        # seq_y = torch.from_numpy(np.expand_dims(self.data[sequence_index][y_begin:y_end], -1))
+        seq = self.data[sequence_index][x_begin:y_end]
+        seq = torch.from_numpy(np.expand_dims(seq,0))
+        
+        # import ipdb; ipdb.set_trace()
+        token, attn, scale = self.tokenizer.input_transform(seq)
+        # token_y, attn_y, scale_y = self.tokenizer.input_transform(seq_y)
+        # import ipdb; ipdb.set_trace()
+        data_x = token[0,:336]
+        data_y = np.concatenate((scale, token[0, 336:]), axis=0)
+        # data_y = np.concatenate(scale, token[0,336:])
         # ipdb.set_trace()
         
+        
 
-        return token_x , token_y
+        return data_x, data_y
 
     def __len__(self):
         return self.num_items

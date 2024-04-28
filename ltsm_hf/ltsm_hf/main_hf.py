@@ -7,6 +7,8 @@ import random
 import ipdb
 
 from tsbench.data_pipeline.data_factory import get_data_loaders, get_datasets
+from tsbench.data_pipeline.dataset import TSTokenDataset
+from tsbench.data_pipeline.data_processing.base_processor import *
 from ltsm.data_provider.hf_data_loader import HF_Dataset
 from ltsm.models import get_model, LTSMConfig
 from peft import get_peft_config, get_peft_model, LoraConfig
@@ -149,7 +151,31 @@ def run(args):
     
     # early_stopping = EarlyStopping(patience=args.patience, verbose=True)
 
+    context_length = args.seq_len+args.pred_len
+    prediction_length = args.pred_len
+    n_tokens = 1024
+    n_special_tokens = 2
+    config = ChronosConfig(
+        tokenizer_class="MeanScaleUniformBins",
+        tokenizer_kwargs=dict(low_limit=-3.0, high_limit=3.0),
+        n_tokens=n_tokens,
+        n_special_tokens=n_special_tokens,
+        pad_token_id=0,
+        eos_token_id=1,
+        use_eos_token=0,
+        model_type="causal",
+        context_length=context_length,
+        prediction_length=prediction_length,
+        num_samples=20,
+        temperature=1.0,
+        top_k=50,
+        top_p=1.0,
+    )
+
+    tokenizer = config.create_tokenizer()
+
     def compute_metrics(p: EvalPrediction):
+        # import ipdb; ipdb.set_trace()
         preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
         preds = np.squeeze(preds)
         if preds.shape != p.label_ids.shape:
@@ -163,8 +189,12 @@ def run(args):
     def compute_loss(model, inputs, return_outputs=False):
         # ipdb.set_trace()
         outputs = model(inputs["input_data"])
+        B, L,M,_= outputs.shape
         # import ipdb; ipdb.set_trace()
-        loss = nn.functional.mse_loss(outputs, inputs["labels"])
+        # outputs = outputs.reshape(B*L,-1)
+        # import ipdb; ipdb.set_trace()
+        # loss = nn.functional.mse_loss(outputs, inputs["labels"])
+        loss = nn.functional.cross_entropy(outputs.reshape(B*L,-1), inputs["labels"][:,1:].long().reshape(B*L))
         return (loss, outputs) if return_outputs else loss
 
     def collate_fn(batch):
@@ -185,11 +215,18 @@ def run(args):
         # labels = inputs["labels"].to(model.module.device)
         
         # monash
+        # ipdb.set_trace()
         input_data = inputs["input_data"].to(model.device)
         labels = inputs["labels"].to(model.device)
+        scale = labels[:,0]
+        labels = labels[:,1:]
         outputs = model(input_data)
-        loss = nn.functional.mse_loss(outputs, labels)
-        return (loss, outputs, labels)
+        indices = torch.max(outputs, dim=-1).indices
+        
+        output_value = tokenizer.output_transform(indices, scale)
+        label_value = tokenizer.output_transform(labels.unsqueeze(-1).long(), scale)
+        loss = nn.functional.mse_loss(output_value, label_value)
+        return (loss, output_value, label_value)
 
 
     training_args = TrainingArguments(

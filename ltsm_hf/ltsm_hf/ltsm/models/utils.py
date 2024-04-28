@@ -9,7 +9,7 @@ def get_model(config):
     elif config.model == 'TimeLLM':
         from ltsm.models.TimeLLM import TimeLLM
         model = TimeLLM(config)
-    elif config.model == 'Chronos':
+    elif config.model == 'Token':
         from ltsm.models.Chronos import Chronos
         model = Chronos(config)
     else:
